@@ -429,8 +429,10 @@ static void DeviceAdded(void *refCon, io_iterator_t iterator)
 // setup database, or create and register a new one.
 //
 // Matching strategy (in order):
-//   1. locationID  — strongest; survives across sessions if port doesn't move
-//   2. VID/PID     — fallback for first boot after driver reinstall
+//   1. locationID              — strongest; survives across sessions if port doesn't move
+//   2. VID/PID                 — fallback for first boot after driver reinstall
+//   3. VID/PID                 — orphan adoption; recovers when locationID drifts after
+//                              power-cycle or port change; skips entries in use by another online device
 //
 // Entities (ports) are only created on first registration; subsequent uses
 // re-read them from the persistent MIDIDevice. This is what makes AMS show
@@ -472,22 +474,8 @@ static MIDIDeviceRef FindOrCreateMIDIDevice(MIDIDriverRef driverRef,
                 result = candidate;
         }
 
-        // Pass 3: orphan adoption. Pass 1 (locationID) and Pass 2 (VID/PID
-        // with no stored locationID) both miss the common case where a
-        // device has been seen before — stored locationID is non-zero —
-        // but USB re-enumerated with a different locationID (different
-        // port, hub reset, or simply the unit power-cycled and macOS
-        // assigned a fresh path). Without this pass the driver would
-        // create a duplicate persistent MIDIDevice every time the SC-8850
-        // is turned off and back on, leaving stale "(disconnected)"
-        // entries lying around for every prior connection.
-        //
-        // Safety: only adopt a candidate when NO currently-online device
-        // is already bound to it. That way a user with two SC-8850s
-        // plugged in (both online with different locationIDs) keeps each
-        // online instance pinned to its own persistent entry, and only
-        // a true orphan — same VID/PID, currently nobody using it —
-        // gets adopted by the newcomer.
+        // Pass 3: adopt orphan by VID/PID when locationID has drifted (power-cycle,
+        // port change). Skip candidates already bound to another online device.
         if (state) {
             for (ItemCount i = 0; i < n && !result; i++) {
                 MIDIDeviceRef candidate = MIDIDeviceListGetDevice(persistentList, i);
@@ -497,23 +485,16 @@ static MIDIDeviceRef FindOrCreateMIDIDevice(MIDIDriverRef driverRef,
                     || (UInt32)storedVP != vendorProduct)
                     continue;
 
-                // Caller (DeviceAdded) holds state->devicesMutex; the
-                // DrvStart / FindDevices callers run before hotplug
-                // registration so no concurrent writers exist there.
                 bool inUse = false;
                 for (auto *otherDev : state->devices) {
-                    if (otherDev != dev
-                        && otherDev->isOnline
-                        && otherDev->midiDevice == candidate) {
+                    if (otherDev->isOnline && otherDev->midiDevice == candidate) {
                         inUse = true;
                         break;
                     }
                 }
                 if (!inUse) {
                     result = candidate;
-                    os_log(sLog,
-                           "FindOrCreate: adopted orphan ref=%lu for %{public}s "
-                           "(locationID drift)",
+                    os_log(sLog, "FindOrCreate: adopted orphan ref=%lu for %{public}s (locationID drift)",
                            (unsigned long)result, dev->deviceInfo->name);
                 }
             }
