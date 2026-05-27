@@ -293,7 +293,9 @@ static void RegisterRemovalNotification(MultiRolandDriverState *state, RolandUSB
 }
 
 // Defined after DeviceAdded — forward-declared here so DeviceAdded can call them
-static MIDIDeviceRef FindOrCreateMIDIDevice(MIDIDriverRef driverRef, RolandUSBDevice *dev);
+static MIDIDeviceRef FindOrCreateMIDIDevice(MIDIDriverRef driverRef,
+                                            RolandUSBDevice *dev,
+                                            MultiRolandDriverState *state);
 static void SetupPortMappings(MultiRolandDriverState *state, RolandUSBDevice *dev);
 
 // ---------- Hotplug callback ----------
@@ -394,7 +396,7 @@ static void DeviceAdded(void *refCon, io_iterator_t iterator)
                     dev->driverRef = driverRef;
                     dev->locationID = locID;
 
-                    dev->midiDevice = FindOrCreateMIDIDevice(driverRef, dev);
+                    dev->midiDevice = FindOrCreateMIDIDevice(driverRef, dev, state);
                     SetupPortMappings(state, dev);
 
                     if (dev->Open()) {
@@ -434,7 +436,8 @@ static void DeviceAdded(void *refCon, io_iterator_t iterator)
 // re-read them from the persistent MIDIDevice. This is what makes AMS show
 // port triangles correctly for multi-port devices.
 static MIDIDeviceRef FindOrCreateMIDIDevice(MIDIDriverRef driverRef,
-                                             RolandUSBDevice *dev)
+                                             RolandUSBDevice *dev,
+                                             MultiRolandDriverState *state)
 {
     UInt32 vendorProduct = ((UInt32)kRolandVendorIDValue << 16)
                            | dev->deviceInfo->productID;
@@ -467,6 +470,53 @@ static MIDIDeviceRef FindOrCreateMIDIDevice(MIDIDriverRef driverRef,
             if (hasVP && (UInt32)storedVP == vendorProduct
                 && (!hasLoc || storedLoc == 0))
                 result = candidate;
+        }
+
+        // Pass 3: orphan adoption. Pass 1 (locationID) and Pass 2 (VID/PID
+        // with no stored locationID) both miss the common case where a
+        // device has been seen before — stored locationID is non-zero —
+        // but USB re-enumerated with a different locationID (different
+        // port, hub reset, or simply the unit power-cycled and macOS
+        // assigned a fresh path). Without this pass the driver would
+        // create a duplicate persistent MIDIDevice every time the SC-8850
+        // is turned off and back on, leaving stale "(disconnected)"
+        // entries lying around for every prior connection.
+        //
+        // Safety: only adopt a candidate when NO currently-online device
+        // is already bound to it. That way a user with two SC-8850s
+        // plugged in (both online with different locationIDs) keeps each
+        // online instance pinned to its own persistent entry, and only
+        // a true orphan — same VID/PID, currently nobody using it —
+        // gets adopted by the newcomer.
+        if (state) {
+            for (ItemCount i = 0; i < n && !result; i++) {
+                MIDIDeviceRef candidate = MIDIDeviceListGetDevice(persistentList, i);
+                SInt32 storedVP = 0;
+                if (MIDIObjectGetIntegerProperty(candidate,
+                        kRolandVendorProductProperty, &storedVP) != noErr
+                    || (UInt32)storedVP != vendorProduct)
+                    continue;
+
+                // Caller (DeviceAdded) holds state->devicesMutex; the
+                // DrvStart / FindDevices callers run before hotplug
+                // registration so no concurrent writers exist there.
+                bool inUse = false;
+                for (auto *otherDev : state->devices) {
+                    if (otherDev != dev
+                        && otherDev->isOnline
+                        && otherDev->midiDevice == candidate) {
+                        inUse = true;
+                        break;
+                    }
+                }
+                if (!inUse) {
+                    result = candidate;
+                    os_log(sLog,
+                           "FindOrCreate: adopted orphan ref=%lu for %{public}s "
+                           "(locationID drift)",
+                           (unsigned long)result, dev->deviceInfo->name);
+                }
+            }
         }
 
         MIDIDeviceListDispose(persistentList);
@@ -563,7 +613,7 @@ static OSStatus DrvFindDevices(MIDIDriverRef self, MIDIDeviceListRef devList)
 
     for (auto *dev : state->devices) {
         if (!dev->midiDevice)
-            dev->midiDevice = FindOrCreateMIDIDevice(self, dev);
+            dev->midiDevice = FindOrCreateMIDIDevice(self, dev, state);
         else
             os_log(sLog, "FindDevices(v1): reusing cached ref=%lu for %{public}s",
                    (unsigned long)dev->midiDevice, dev->deviceInfo->name);
@@ -627,7 +677,7 @@ static OSStatus DrvStart(MIDIDriverRef self, MIDIDeviceListRef devList)
                    (unsigned long)found, dev->deviceInfo->name);
         } else {
             // Brand-new device — create and register with CoreMIDI.
-            dev->midiDevice = FindOrCreateMIDIDevice(self, dev);
+            dev->midiDevice = FindOrCreateMIDIDevice(self, dev, state);
         }
 
         SetupPortMappings(state, dev);
