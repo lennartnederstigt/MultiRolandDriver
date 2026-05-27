@@ -8,7 +8,7 @@ Open-source CoreMIDI driver plugin for macOS that replaces Roland's broken legac
 
 This driver provides modern macOS (Apple Silicon) support for a wide range of legacy synthesizers. It was developed to ensure continued interoperability and preservation of hardware instruments that are no longer supported by their original manufacturer.
 
-**Technical Implementation:** This driver contains no code, binaries, or firmware from Roland Corporation. It is a 100% original implementation written from scratch, based entirely on public USB-MIDI specifications and observation of hardware communication protocols. The plugin installs per-user with no kernel extension and no elevated privileges required. A single universal binary covers all 32 supported devices.
+**Technical Implementation:** This driver contains no code, binaries, or firmware from Roland Corporation. It is a 100% original implementation written from scratch, based entirely on public USB-MIDI specifications and observation of hardware communication protocols. No kernel extension or DriverKit extension is required — the driver is a standard CoreMIDI plugin. The pre-built installer deploys system-wide and requires an administrator password. Building from source installs per-user with no elevated privileges. A single universal binary covers all 32 supported devices.
 
 **Purpose:** This is a non-commercial project dedicated to the synthesizer community, ensuring that classic instruments from 2002--2014 remain functional in modern studio environments.
 
@@ -62,17 +62,15 @@ make clean && make
 make install
 ```
 
-Builds a universal binary (arm64 + x86_64), signs with your Apple Development certificate, and installs the plugin to `~/Library/Audio/MIDI Drivers/`, then restarts MIDIServer.
+Builds a universal binary (arm64 + x86_64), signs with your Apple Development certificate, and installs the plugin to `~/Library/Audio/MIDI Drivers/` — no administrator password required. MIDIServer is restarted automatically.
 
-## Pre-built plugin
+## Pre-built installer
 
-Download `MultiRolandDriver.plugin` from [Releases](../../releases), then run:
+Download `MultiRolandDriver-vX.Y.Z.pkg` from [Releases](../../releases) and double-click to install.
 
-```bash
-./install.sh
-```
+The installer deploys the plugin to `/Library/Audio/MIDI Drivers/` (system-wide) and requires an administrator password. MIDIServer is restarted automatically — no reboot required. If a previous version was installed per-user (`~/Library/Audio/MIDI Drivers/`), it is removed automatically.
 
-The script removes the macOS quarantine flag, installs the plugin to `~/Library/Audio/MIDI Drivers/`, and restarts MIDIServer. The plugin is pre-signed — no local certificate required.
+The pre-built package is signed with a certificate and accepted by macOS for safe installations.
 
 ## System Requirements
 
