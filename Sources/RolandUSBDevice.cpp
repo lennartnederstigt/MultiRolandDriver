@@ -191,24 +191,9 @@ static IOUSBInterfaceInterface650 **ProbeAndOpenInterface(io_service_t intfServi
 
     kr = (*intf)->USBInterfaceOpen(intf);
     if (kr == kIOReturnSuccess) {
-        // Verify this interface has endpoints at some alternate setting.
-        // Some devices (e.g. SC-8850) expose multiple vendor-specific interfaces
-        // but only one carries the bulk MIDI endpoints.
-        bool hasEndpoints = false;
-        for (UInt8 alt = 0; alt <= 15; alt++) {
-            if (alt > 0) {
-                kern_return_t akr = (*intf)->SetAlternateInterface(intf, alt);
-                if (akr != kIOReturnSuccess) break;
-            }
-            UInt8 numEP = 0;
-            (*intf)->GetNumEndpoints(intf, &numEP);
-            if (numEP > 0) {
-                hasEndpoints = true;
-                if (alt > 0)
-                    (*intf)->SetAlternateInterface(intf, 0);
-                break;
-            }
-        }
+        UInt8 numEP = 0;
+        (*intf)->GetNumEndpoints(intf, &numEP);
+        bool hasEndpoints = numEP > 0;
 
         if (!hasEndpoints) {
             os_log(sLog, "FindInterface: skipping interface %d (class=0x%02x sub=0x%02x, no endpoints)",
